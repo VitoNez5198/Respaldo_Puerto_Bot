@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='bot',
+    name='Bot_Respaldos_Puerto',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
