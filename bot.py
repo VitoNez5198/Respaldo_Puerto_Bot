@@ -1,10 +1,17 @@
 import os
 import re
 import telebot
+import io
+import time
+import requests
+import textwrap
+import logging
 from datetime import datetime
 from threading import Lock, Timer 
 from dotenv import load_dotenv
+from telebot import apihelper
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from PIL import Image, ImageDraw, ImageFont
 
 # ==========================================
 # ⚙️ CONFIGURACIÓN Y VARIABLES GLOBALES
@@ -21,45 +28,42 @@ bot = telebot.TeleBot(TOKEN)
 semaforo = Lock()
 estado_usuarios = {}
 timers_usuarios = {} 
-memoria_contenedores = {} # Memoria global para recordar contenedores
-
-print("🤖 Iniciando el servidor del bot...")
+memoria_contenedores = {} 
 
 # ==========================================
 # 📩 FUNCIONES DE APOYO
 # ==========================================
 
-def pedir_cliente(chat_id, codigo):
-    """Envía el menú de clientes o confirma si es un contenedor retomado."""
+def preguntar_fin_fotos(chat_id, codigo):
+    """Pregunta al usuario si ya terminó de enviar fotos tras una pausa."""
     if chat_id in estado_usuarios and estado_usuarios[chat_id]['codigo'] == codigo:
-        # Evitamos mensajes duplicados
+        if estado_usuarios[chat_id].get('paso') != 'fotos':
+            return
+        
         if estado_usuarios[chat_id].get('avisado', False):
             return
             
-        estado = estado_usuarios[chat_id]
-        estado['avisado'] = True
+        estado_usuarios[chat_id]['avisado'] = True
+            
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton("✅ Sí, ya terminé", callback_data="fin_si"),
+            InlineKeyboardButton("📸 No, enviaré más", callback_data="fin_no")
+        )
         
-        # --- LÓGICA DE OMISIÓN ---
-        if estado.get('es_retome') == True:
-            estado['paso'] = 'completado'
-            bot.send_message(
+        try:
+            mensaje_enviado = bot.send_message(
                 chat_id, 
-                f"✅ ¡Fotos extra guardadas para el contenedor **{codigo}**!\n*(Se mantuvieron el cliente {estado['cliente']} y la nave {estado['nave']})*",
+                f"⏳ Han pasado unos segundos...\n¿Terminaste de enviar las fotos para el contenedor **{codigo}**?",
+                reply_markup=markup,
                 parse_mode="Markdown"
             )
-        else:
-            # Flujo normal para contenedores nuevos
-            bot.send_message(
-                chat_id, 
-                f"✅ ¡Fotos recibidas para el contenedor **{codigo}**!\n\n¿A qué cliente pertenece?",
-                reply_markup=generar_menu_clientes(),
-                parse_mode="Markdown"
-            )
-        print(f"[SISTEMA] Fin de ráfaga para {codigo}")
-        
+            estado_usuarios[chat_id]['id_pregunta'] = mensaje_enviado.message_id
+        except Exception as e:
+            print(f"❌ Error al enviar pregunta de cierre: {e}")
+
 def generar_menu_clientes():
     markup = InlineKeyboardMarkup()
-    
     b1 = InlineKeyboardButton("ARAUCO", callback_data="cliente_ARAUCO")
     b2 = InlineKeyboardButton("CMPC", callback_data="cliente_CMPC")
     b3 = InlineKeyboardButton("MASISA", callback_data="cliente_MASISA")
@@ -69,7 +73,6 @@ def generar_menu_clientes():
     markup.row(b1, b2)
     markup.row(b3, b4)
     markup.row(b5)
-    
     return markup
 
 # ==========================================
@@ -90,30 +93,25 @@ def manejar_textos(message):
     id_chat = message.chat.id
     estado = estado_usuarios.get(id_chat, {})
 
-    # --- LÓGICA 1: ESPERANDO NOMBRE DE LA NAVE ---
     if estado.get('paso') == 'nave':
         nombre_nave = message.text.strip().upper()
         estado_usuarios[id_chat]['nave'] = nombre_nave
-        estado_usuarios[id_chat]['paso'] = 'completado' 
+        estado_usuarios[id_chat]['paso'] = 'fotos' 
         
         codigo_actual = estado['codigo']
-        # Guardamos en memoria global
         memoria_contenedores[codigo_actual] = {
             'cliente': estado['cliente'],
             'nave': nombre_nave
         }
         
-        bot.reply_to(message, f"✅ ¡Todo guardado!\nContenedor: {codigo_actual}\nCliente: {estado['cliente']}\nNave: {nombre_nave}\n\n(Puedes ingresar un nuevo contenedor cuando quieras).")
-        print(f"[+] Datos completos para {codigo_actual}")
+        bot.reply_to(message, f"✅ Datos completos.\n\n📸 Ahora sí, **envíame todas las fotos** del contenedor {codigo_actual}.", parse_mode="Markdown")
         return
 
-    # --- LÓGICA 2: ESPERANDO CÓDIGO DEL CONTENEDOR ---
     codigo_limpio = message.text.strip().upper().replace("-", "").replace(" ", "")
     patron = r"^[A-Z]{4}\d{7}$"
     
     if re.match(patron, codigo_limpio):
         datos_previos = memoria_contenedores.get(codigo_limpio)
-        
         if datos_previos:
             estado_usuarios[id_chat] = {
                 'codigo': codigo_limpio,
@@ -121,58 +119,84 @@ def manejar_textos(message):
                 'avisado': False,
                 'paso': 'fotos',
                 'cliente': datos_previos['cliente'],
-                'nave': datos_previos['nave'],
-                'es_retome': True
+                'nave': datos_previos['nave']
             }
-            bot.reply_to(message, f"🔄 Retomando contenedor: {codigo_limpio}\n*(Ya registrado con {datos_previos['cliente']} | Nave: {datos_previos['nave']})*\n\n📸 Envíame las fotos extra.")
+            bot.reply_to(message, f"🔄 Retomando contenedor: {codigo_limpio}\n*(Cliente: {datos_previos['cliente']} | Nave: {datos_previos['nave']})*\n\n📸 Envíame las fotos extra.")
         else:
             estado_usuarios[id_chat] = {
                 'codigo': codigo_limpio,
                 'contador': 1,
                 'avisado': False,
-                'paso': 'fotos',
+                'paso': 'cliente', 
                 'cliente': None,
-                'nave': None,
-                'es_retome': False
+                'nave': None
             }
-            bot.reply_to(message, f"✅ Código validado: {codigo_limpio}\n\n📸 Ahora envíame las fotos de este contenedor.")
+            bot.reply_to(message, f"✅ Código validado: {codigo_limpio}\n\n¿A qué cliente pertenece?", reply_markup=generar_menu_clientes())
     else:
-        bot.reply_to(message, "❌ Código inválido. Recuerda: 4 letras seguidas de 7 números o verifica que no estés escribiendo la nave antes de tiempo.")
+        bot.reply_to(message, "❌ Código inválido. Recuerda: 4 letras seguidas de 7 números.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cliente_'))
 def procesar_seleccion_cliente(call):
     id_chat = call.message.chat.id
-    # Extraemos el nombre real quitando el prefijo interno
     cliente_seleccionado = call.data.replace("cliente_", "") 
-    
     if id_chat in estado_usuarios:
         estado_usuarios[id_chat]['cliente'] = cliente_seleccionado
         estado_usuarios[id_chat]['paso'] = 'nave' 
-        
-    # Esto apaga el relojito de "cargando" en el botón
     bot.answer_callback_query(call.id) 
-    
     bot.edit_message_text(
         chat_id=id_chat,
         message_id=call.message.message_id,
-        text=f"✅ Seleccionaste: **{cliente_seleccionado}**",
+        text=f"✅ Cliente seleccionado: **{cliente_seleccionado}**",
         parse_mode="Markdown"
     )
-    
     bot.send_message(id_chat, "🚢 Ahora, por favor escribe el nombre de la nave:")
     
+@bot.callback_query_handler(func=lambda call: call.data in ['fin_si', 'fin_no'])
+def procesar_fin_fotos(call):
+    id_chat = call.message.chat.id
+    if id_chat not in estado_usuarios:
+        bot.answer_callback_query(call.id)
+        return
+    if call.data == 'fin_si':
+        codigo = estado_usuarios[id_chat]['codigo']
+        estado_usuarios[id_chat]['paso'] = 'completado' 
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(
+            chat_id=id_chat,
+            message_id=call.message.message_id,
+            text=f"✅ **Contenedor {codigo} cerrado exitosamente.**\n\n*(💡 Nota: Si necesitas agregar más fotos más tarde, simplemente vuelve a escribir el código {codigo} y el bot lo retomará de inmediato sin pedirte los datos de nuevo)*",
+            parse_mode="Markdown"
+        )
+    elif call.data == 'fin_no':
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(
+            chat_id=id_chat,
+            message_id=call.message.message_id,
+            text="📸 Entendido. Sigo a la espera de las demás fotos...",
+            parse_mode="Markdown"
+        )
+
 @bot.message_handler(content_types=['photo'])
 def recibir_fotos(message):
     id_chat = message.chat.id
-    
     if id_chat not in estado_usuarios or estado_usuarios[id_chat].get('paso') != 'fotos':
-        bot.reply_to(message, "⚠️ Primero escribe el código del contenedor.")
+        bot.reply_to(message, "⚠️ Por favor, completa los datos del contenedor antes de enviar fotos.")
         return
+    
+    id_pregunta = estado_usuarios[id_chat].get('id_pregunta')
+    if id_pregunta:
+        try:
+            bot.delete_message(id_chat, id_pregunta)
+            estado_usuarios[id_chat]['id_pregunta'] = None
+        except:
+            pass
 
     with semaforo:
         estado_usuarios[id_chat]['avisado'] = False 
         codigo_actual = estado_usuarios[id_chat]['codigo']
         contador_actual = estado_usuarios[id_chat]['contador']
+        cliente_actual = estado_usuarios[id_chat]['cliente']
+        nave_actual = estado_usuarios[id_chat]['nave']
         
         try:
             ahora = datetime.now()
@@ -182,15 +206,30 @@ def recibir_fotos(message):
             file_info = bot.get_file(message.photo[-1].file_id)
             downloaded_file = bot.download_file(file_info.file_path)
             
+            imagen = Image.open(io.BytesIO(downloaded_file))
+            dibujar = ImageDraw.Draw(imagen, "RGBA")
+            nave_formateada = textwrap.fill(nave_actual, width=25, break_long_words=True)
+            texto_marca = f"Cod. Cont.: {codigo_actual}\nCliente: {cliente_actual}\nNave: {nave_formateada}"
+            
+            try:
+                fuente = ImageFont.truetype("arial.ttf", 38)
+            except IOError:
+                fuente = ImageFont.load_default()
+
+            pos_x, pos_y = 30, 30
+            caja_texto = dibujar.textbbox((pos_x, pos_y), texto_marca, font=fuente)
+            margen = 20
+            coordenadas_fondo = (caja_texto[0]-margen, caja_texto[1]-margen, caja_texto[2]+margen, caja_texto[3]+margen)
+            dibujar.rectangle(coordenadas_fondo, fill=(0, 0, 0, 180)) 
+            dibujar.text((pos_x, pos_y), texto_marca, fill=(255, 255, 255, 255), font=fuente)
+
             timestamp = ahora.strftime("%Y%m%d_%H%M%S")
             nombre_archivo = f"{codigo_actual}_{timestamp}.jpg"
             ruta_archivo = os.path.join(ruta_carpeta_final, nombre_archivo)
             
-            with open(ruta_archivo, 'wb') as new_file:
-                new_file.write(downloaded_file)
-            
+            imagen.save(ruta_archivo, "JPEG")
             estado_usuarios[id_chat]['contador'] += 1
-            print(f"[LOCAL] {nombre_archivo} guardado con éxito.")
+            print(f"[LOCAL] {nombre_archivo} guardado.")
             
         except Exception as e:
             print(f"❌ Error Local: {e}")
@@ -198,18 +237,16 @@ def recibir_fotos(message):
 
     try:
         id_canal_limpio = int(str(ID_CANAL).strip())
-        bot.send_photo(
-            id_canal_limpio, 
-            message.photo[-1].file_id, 
-            caption=f"📦 {codigo_actual} - Foto {contador_actual}"
-        )
+        with open(ruta_archivo, 'rb') as foto_editada:
+            bot.send_photo(id_canal_limpio, foto_editada, caption=f"📦 {codigo_actual} - Foto {contador_actual}")
     except Exception as e:
         print(f"❌ Error Nube: {e}")
 
     if id_chat in timers_usuarios:
         timers_usuarios[id_chat].cancel()
 
-    t = Timer(5.0, pedir_cliente, args=[id_chat, codigo_actual])
+    # --- CAMBIO: 30 segundos de espera antes de preguntar ---
+    t = Timer(30.0, preguntar_fin_fotos, args=[id_chat, codigo_actual])
     timers_usuarios[id_chat] = t
     t.start()
 
@@ -218,4 +255,6 @@ def recibir_fotos(message):
 # ==========================================
 if __name__ == "__main__":
     print("✅ Bot conectado. Esperando mensajes...")
-    bot.infinity_polling()
+    # timeout: le da 20 seg a las fotos pesadas antes de fallar
+    # long_polling_timeout: mantiene la conexión estable
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
