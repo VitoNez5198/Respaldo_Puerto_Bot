@@ -1,66 +1,92 @@
-# 📦 Respaldo Puerto Bot
+# Respaldo Puerto Bot — Automatización de Evidencia Fotográfica Portuaria
 
-Sistema automatizado de respaldo de fotografías para contenedores, diseñado para optimizar el flujo de trabajo en operaciones portuarias. Este bot permite la captura, validación y almacenamiento organizado tanto en local (servidor de oficina) como en la nube (Telegram).
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/)
+[![Telegram Bot API](https://img.shields.io/badge/API-Telegram%20Bot-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
+[![Impact](https://img.shields.io/badge/Impacto--90%25%20tiempo%20de%20registro-34d399)](#contexto-y-problema)
 
-## 🚀 Características Principales
+> Sistema de automatización operacional en Python que captura, valida por regex y respalda fotografías de contenedores en servidor local y canal de Telegram, reduciendo en **90%** el tiempo de registro documental en operaciones portuarias.
 
-* **Validación con Regex:** Filtra códigos de contenedores bajo el formato estándar (4 letras y 7 números).
-* **Gestión de Concurrencia:** Implementación de `threading.Lock` para evitar condiciones de carrera (Race Conditions) al recibir múltiples fotos en ráfaga.
-* **Almacenamiento Organizado:** Creación automática de directorios por Año/Mes/Código_Contenedor.
-* **Sistema de Debounce:** Uso de `threading.Timer` para enviar una única confirmación al usuario tras finalizar la carga masiva de archivos.
-* **Seguridad:** Gestión de credenciales mediante variables de entorno (`.env`).
+---
 
-## 🛠️ Tecnologías Utilizadas
+## Contexto y Problema
 
-* **Lenguaje:** Python 3.x
-* **Librería API:** `pyTelegramBotAPI` (Telebot)
-* **Concurrencia:** `threading`
-* **Variables de Entorno:** `python-dotenv`
+En operaciones portuarias, el registro manual de evidencia fotográfica por contenedor (descargar fotos, renombrar, crear carpetas por fecha/código y subir copias de respaldo) consume tiempo operativo y es propenso a errores de clasificación.
 
-## 📋 Requisitos Previos
+Este bot elimina el proceso manual: el operador envía el código del contenedor y la ráfaga de fotos por Telegram, y el sistema valida el formato, organiza automáticamente las carpetas (`Año/Mes/Código_Contenedor`) y replica el respaldo en un canal privado.
 
-Antes de ejecutar el proyecto, asegúrate de tener instalado:
-* Python 3.10 o superior
-* Un bot de Telegram (creado vía @BotFather)
-* Un canal de Telegram donde el bot sea administrador
+---
 
-## ⚙️ Instalación y Configuración
+## Arquitectura del Sistema
 
-1. **Clona el repositorio:**
-   ```
-   git clone [https://github.com/VitoNez5198/Respaldo_Puerto_Bot.git](https://github.com/VitoNez5198/Respaldo_Puerto_Bot)
-   cd Respaldo_Puerto_Bot
+Flujo de captura, validación concurrente y doble respaldo (local + nube):
 
-2. **Crea y activa un entorno virtual:**
+![Arquitectura de Automatización Respaldo Puerto Bot](docs/architecture.svg)
 
+---
+
+## Decisiones Técnicas
+
+- **Validación estricta con Regex:** verifica el código estándar de contenedor (4 letras + 7 dígitos, formato ISO 6346) antes de crear carpetas o aceptar cargas.
+- **Control de concurrencia (`threading.Lock`):** evita condiciones de carrera (*race conditions*) al recibir álbumes o ráfagas simultáneas de fotografías desde terreno.
+- **Confirmación con Debounce (`threading.Timer`):** agrupa la recepción de múltiples archivos y envía una única confirmación limpia al finalizar la carga masiva.
+- **Evolución prevista a AWS:** reemplazar el almacenamiento local por **Amazon S3** con reglas de **Lifecycle** (transición automática a **S3 Glacier Instant Retrieval** para archivo histórico y reducción de costos de almacenamiento) y despliegue del worker en EC2/ECS o Lambda vía webhook.
+
+---
+
+## Seguridad y Configuración
+
+- **Credenciales aisladas:** el token del bot, ID de canal y ruta base se cargan desde `.env` mediante `python-dotenv` (plantilla en [.env.example](.env.example); `.env` excluido en `.gitignore`).
+- **Hardening para producción:** restringir acceso por lista blanca de `user_id` autorizados en Telegram, cifrar respaldos en reposo y rotar el token del bot periódicamente.
+
+---
+
+## Estructura del Repositorio
+
+```text
+Respaldo_Puerto_Bot/
+├── docs/
+│   └── architecture.svg       # Diagrama de flujo operacional y concurrencia
+├── bot.py                     # Lógica del bot, regex, threading.Lock y debounce
+├── icono.ico                  # Ícono de empaquetado de escritorio
+├── requirements.txt           # Dependencias Python
+├── .env.example               # Plantilla de variables de entorno
+├── .gitignore
+└── README.md
 ```
-python -m venv venv
-source venv/Scripts/activate  # En Windows
-```
 
-3. **Instala las dependencias:**
+---
 
-```
-pip install -r requirements.txt
-```
-
-4. **Configura tus credenciales:**
-Crea un archivo .env en la raíz del proyecto con el siguiente formato:
+## Instalación y Uso
 
 ```bash
-TOKEN_TELEGRAM=tu_token_aqui
-ID_CANAL=tu_id_de_canal
-RUTA_BASE=D:\Ruta\Hacia\Tus\Archivos
+# 1. Clonar repositorio
+git clone https://github.com/VitoNez5198/Respaldo_Puerto_Bot.git
+cd Respaldo_Puerto_Bot
+
+# 2. Crear entorno virtual e instalar dependencias
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3. Configurar credenciales
+copy .env.example .env
+
+# 4. Ejecutar el bot
+python bot.py
 ```
 
-## 🖥️ Uso
+**Flujo en operación:**
+1. Enviar código de contenedor al chat del bot (ej. `ABCD1234560`).
+2. Enviar las fotografías individuales o en ráfaga.
+3. Recibir confirmación única al completar el respaldo en `Año/Mes/Código_Contenedor` y en el canal de Telegram.
 
-1. Ejecuta el bot: `python bot.py`
+---
 
-2. Envía el código del contenedor al chat privado del bot (Ej: `ABCD1234560`).
+## Autor
 
-3. Envía las fotografías (individuales o en grupo).
+**Víctor Martínez** — Junior Cloud Engineer | AWS, FinOps & Applied AI  
+AWS Certified Cloud Practitioner • AWS Cloud re/Start • En preparación para SAA-C03
 
-4. El bot responderá con una confirmación final cuando todos los archivos hayan sido procesados y respaldados.
-
-Proyecto desarrollado como parte de la formación en Ingeniería en Informática.
+- **Portafolio:** [vitonez5198.github.io/Portfolio-VM](https://vitonez5198.github.io/Portfolio-VM/)
+- **LinkedIn:** [victor-ms-dev](https://www.linkedin.com/in/victor-ms-dev/)
+- **GitHub:** [@VitoNez5198](https://github.com/VitoNez5198)
