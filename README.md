@@ -20,7 +20,14 @@ Este bot elimina el proceso manual: el operador envía el código del contenedor
 
 Flujo de captura, validación concurrente y doble respaldo (local + nube):
 
-![Arquitectura de Automatización Respaldo Puerto Bot](docs/architecture.svg)
+![Arquitectura de Automatización Respaldo Puerto Bot](docs/architecture.png)
+
+### Flujo de Trabajo y Rol de cada Componente
+
+1. **Captura desde terreno (`Operador Puerto` + `Telegram Bot API`):** El operador envía el código de contenedor (formato ISO 6346) seguido de las fotografías individuales o en ráfaga al chat del bot en Telegram.
+2. **Validación y control de concurrencia (`Bot Python`):** El servicio en servidor local recibe los mensajes desde la API de Telegram, valida el código mediante expresión regular (`^[A-Z]{4}\d{7}$`), sincroniza la recepción de ráfagas simultáneas con `threading.Lock` y agrupa la confirmación final con `threading.Timer` (debounce).
+3. **Almacenamiento estructurado (`Almacenamiento Local`):** Las imágenes se descargan y clasifican automáticamente en carpetas jerárquicas por `Año/Mes/Código_Contenedor`, asegurando trazabilidad documental.
+4. **Respaldo en nube (`Canal Privado Telegram`):** En paralelo, el bot replica el registro fotográfico en un canal privado de Telegram como copia de seguridad externa y envía una única confirmación limpia al operador.
 
 ---
 
@@ -45,7 +52,8 @@ Flujo de captura, validación concurrente y doble respaldo (local + nube):
 ```text
 Respaldo_Puerto_Bot/
 ├── docs/
-│   └── architecture.svg       # Diagrama de flujo operacional y concurrencia
+│   ├── architecture.drawio    # Fuente editable del diagrama (Draw.io)
+│   └── architecture.png       # Diagrama de flujo operacional y concurrencia
 ├── bot.py                     # Lógica del bot, regex, threading.Lock y debounce
 ├── icono.ico                  # Ícono de empaquetado de escritorio
 ├── requirements.txt           # Dependencias Python
